@@ -1,0 +1,48 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // User profiles: users can read/write their own document
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    // Alerts: owner can read/update/delete; owner OR STAFF/ADMIN can create (so staff can create alerts for applicants)
+    match /users/{userId}/alerts/{alertId} {
+      allow read, update, delete: if request.auth != null && request.auth.uid == userId;
+      allow create: if request.auth != null
+        && (request.auth.uid == userId
+            || (exists(path('databases', database, 'documents', 'users', request.auth.uid))
+                && (get(path('databases', database, 'documents', 'users', request.auth.uid)).data.get('role', '') == 'STAFF'
+                    || get(path('databases', database, 'documents', 'users', request.auth.uid)).data.get('role', '') == 'ADMIN')));
+    }
+    // Organizations: staff/admin can read their org (by orgId from user doc)
+    match /organizations/{orgId} {
+      allow read: if request.auth != null && get(path('databases', database, 'documents', 'users', request.auth.uid)).data != null && get(path('databases', database, 'documents', 'users', request.auth.uid)).data.orgId == orgId;
+      allow write: if false;
+    }
+    // Events: any signed-in user can read (list); any signed-in can create; creator or STAFF/ADMIN can update/delete (STAFF only for their org)
+    match /events/{eventId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update, delete: if request.auth != null
+        && (
+          resource.data.get('createdByUid', '') == request.auth.uid
+          || (exists(path('databases', database, 'documents', 'users', request.auth.uid))
+              && get(path('databases', database, 'documents', 'users', request.auth.uid)).data != null
+              && (
+                get(path('databases', database, 'documents', 'users', request.auth.uid)).data.get('role', '') == 'ADMIN'
+                || (get(path('databases', database, 'documents', 'users', request.auth.uid)).data.get('role', '') == 'STAFF'
+                    && get(path('databases', database, 'documents', 'users', request.auth.uid)).data.get('orgId', '') == resource.data.get('orgId', ''))
+              ))
+        );
+    }
+    // Screenings: applicant read/write own; staff/admin read/update for their org
+    match /screenings/{screeningId} {
+      allow read, update: if request.auth != null && (
+        resource.data.applicantUid == request.auth.uid
+        || (get(path('databases', database, 'documents', 'users', request.auth.uid)).data != null && get(path('databases', database, 'documents', 'users', request.auth.uid)).data.orgId == resource.data.orgId)
+      );
+      allow create: if request.auth != null && request.resource.data.applicantUid == request.auth.uid;
+      allow delete: if false;
+    }
+  }
+}
