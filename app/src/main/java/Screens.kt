@@ -915,6 +915,56 @@ private fun ApplicantScreeningTab(screeningVm: ScreeningViewModel, onShowMessage
                 }
             }
 
+            // ── Under development modules (Cyanosis + Skin Lesion) ──────
+            listOf(
+                "Cyanosis Check (Nail Bed)" to "Checks fingernail beds for bluish discoloration that may indicate poor oxygen circulation.",
+                "Skin Lesion Check" to "Checks for visible skin lesions, rashes, or abnormalities that may affect donation eligibility."
+            ).forEach { (title, description) ->
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = CardWhite),
+                    border = BorderStroke(0.5.dp, BorderColor)
+                ) {
+                    Column(Modifier.padding(16.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = TextHint, modifier = Modifier.weight(1f))
+                            StatusBadge(text = "Coming soon", type = BadgeType.GRAY)
+                        }
+                        Text(description, fontSize = 12.sp, color = TextHint, modifier = Modifier.padding(top = 6.dp), lineHeight = 18.sp)
+                        Spacer(Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    color = androidx.compose.ui.graphics.Color(0xFFF3F4F6),
+                                    shape = RoundedCornerShape(8.dp)
+                                )
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Info,
+                                contentDescription = null,
+                                tint = TextHint,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = "This test is under development. Staff will assess this condition manually during your screening.",
+                                fontSize = 11.sp,
+                                color = TextHint,
+                                lineHeight = 16.sp
+                            )
+                        }
+                    }
+                }
+            }
+
             if (selectedTest != null) {
                 BrandCard {
                     Text(selectedTest!!.title, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = TextPrimary)
@@ -1333,20 +1383,11 @@ private fun ApplicantResultTab(screeningVm: ScreeningViewModel) {
                     PhysicalTestResult.POSSIBLE_SIGN -> { jaundiceLabel = "Possible sign"; jaundiceBadge = BadgeType.RED   }
                     PhysicalTestResult.NOT_DONE      -> { jaundiceLabel = "Not done";      jaundiceBadge = BadgeType.GRAY  }
                 }
-                val cyanosisLabel: String
-                val cyanosisBadge: BadgeType
-                when (sc.cyanosisResult) {
-                    PhysicalTestResult.NORMAL        -> { cyanosisLabel = "Normal";        cyanosisBadge = BadgeType.GREEN }
-                    PhysicalTestResult.POSSIBLE_SIGN -> { cyanosisLabel = "Possible sign"; cyanosisBadge = BadgeType.RED   }
-                    PhysicalTestResult.NOT_DONE      -> { cyanosisLabel = "Not done";      cyanosisBadge = BadgeType.GRAY  }
-                }
-                val skinLesionLabel: String
-                val skinLesionBadge: BadgeType
-                when (sc.skinLesionResult) {
-                    PhysicalTestResult.NORMAL        -> { skinLesionLabel = "Normal";        skinLesionBadge = BadgeType.GREEN }
-                    PhysicalTestResult.POSSIBLE_SIGN -> { skinLesionLabel = "Possible sign"; skinLesionBadge = BadgeType.RED   }
-                    PhysicalTestResult.NOT_DONE      -> { skinLesionLabel = "Not done";      skinLesionBadge = BadgeType.GRAY  }
-                }
+                // Cyanosis + Skin Lesion are under development — always show "Not assessed"
+                val cyanosisLabel = "Not assessed"
+                val cyanosisBadge = BadgeType.GRAY
+                val skinLesionLabel = "Not assessed"
+                val skinLesionBadge = BadgeType.GRAY
                 val questionnaireLabel: String
                 val questionnaireBadge: BadgeType
                 when (sc.questionnaireStatus) {
@@ -2507,7 +2548,7 @@ fun ConsentScreen(
                 Spacer(Modifier.height(10.dp))
                 ConsentPoint(
                     icon = Icons.Outlined.CameraAlt,
-                    text = "Uses your camera to check for possible visual signs of anemia (pallor), jaundice, cyanosis, and skin conditions using color analysis."
+                    text = "Uses your camera to check for possible visual signs of anemia (pallor) and jaundice using color analysis. Cyanosis and skin lesion modules are under development for future updates."
                 )
                 Spacer(Modifier.height(8.dp))
                 ConsentPoint(
