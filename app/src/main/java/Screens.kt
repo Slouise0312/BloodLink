@@ -10,6 +10,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -1817,6 +1818,7 @@ private fun StaffApplicantsTab(eventVm: EventViewModel, staffVm: StaffApplicants
     val screenings    by staffVm.screenings.collectAsState()
     val filter        by staffVm.filter.collectAsState()
     var outcomeDialog by remember { mutableStateOf<Screening?>(null) }
+    var summaryDialog by remember { mutableStateOf<Screening?>(null) }
 
     val filteredList = remember(screenings, filter) {
         when (filter) {
@@ -1911,7 +1913,7 @@ private fun StaffApplicantsTab(eventVm: EventViewModel, staffVm: StaffApplicants
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(filteredList) { s ->
-                        BrandCard {
+                        BrandCard(modifier = Modifier.clickable { summaryDialog = s }) {
                             Row(
                                 Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
@@ -1965,6 +1967,169 @@ private fun StaffApplicantsTab(eventVm: EventViewModel, staffVm: StaffApplicants
                 }
             }
         }
+    }
+
+    // ── Screening Summary Dialog ──────────────────────────────────────
+    summaryDialog?.let { s ->
+        AlertDialog(
+            onDismissRequest = { summaryDialog = null },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    AvatarCircle((s.applicantName?.take(2) ?: s.applicantUid.take(2)).uppercase())
+                    Column {
+                        Text(s.applicantName?.ifBlank { null } ?: "Applicant", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                        Text("Updated ${SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(s.updatedAt))}", fontSize = 11.sp, color = TextHint)
+                    }
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    // Physical screening section
+                    Text("Physical Screening", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = TextSecondary)
+
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Pallor (anemia)", fontSize = 12.sp, color = TextPrimary)
+                        StatusBadge(
+                            text = when (s.pallorResult) {
+                                PhysicalTestResult.NORMAL -> "Normal" + (s.pallorScore?.let { " · ${(it * 100).toInt()}%" } ?: "")
+                                PhysicalTestResult.POSSIBLE_SIGN -> "Possible sign" + (s.pallorScore?.let { " · ${(it * 100).toInt()}%" } ?: "")
+                                PhysicalTestResult.NOT_DONE -> "Not done"
+                            },
+                            type = when (s.pallorResult) {
+                                PhysicalTestResult.NORMAL -> BadgeType.GREEN
+                                PhysicalTestResult.POSSIBLE_SIGN -> BadgeType.RED
+                                PhysicalTestResult.NOT_DONE -> BadgeType.GRAY
+                            }
+                        )
+                    }
+
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Jaundice", fontSize = 12.sp, color = TextPrimary)
+                        StatusBadge(
+                            text = when (s.jaundiceResult) {
+                                PhysicalTestResult.NORMAL -> "Normal" + (s.jaundiceIndex?.let { " · ${(it * 100).toInt()}%" } ?: "")
+                                PhysicalTestResult.POSSIBLE_SIGN -> "Possible sign" + (s.jaundiceIndex?.let { " · ${(it * 100).toInt()}%" } ?: "")
+                                PhysicalTestResult.NOT_DONE -> "Not done"
+                            },
+                            type = when (s.jaundiceResult) {
+                                PhysicalTestResult.NORMAL -> BadgeType.GREEN
+                                PhysicalTestResult.POSSIBLE_SIGN -> BadgeType.RED
+                                PhysicalTestResult.NOT_DONE -> BadgeType.GRAY
+                            }
+                        )
+                    }
+
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Cyanosis", fontSize = 12.sp, color = TextPrimary)
+                        StatusBadge(text = "Not assessed", type = BadgeType.GRAY)
+                    }
+
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Skin lesion", fontSize = 12.sp, color = TextPrimary)
+                        StatusBadge(text = "Not assessed", type = BadgeType.GRAY)
+                    }
+
+                    Spacer(Modifier.height(4.dp))
+                    SectionDivider()
+                    Spacer(Modifier.height(4.dp))
+
+                    // Questionnaire section
+                    Text("Health Questionnaire", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = TextSecondary)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Status", fontSize = 12.sp, color = TextPrimary)
+                        StatusBadge(
+                            text = when (s.questionnaireStatus) {
+                                QuestionnaireStatus.NOT_DONE -> "Not done"
+                                QuestionnaireStatus.ELIGIBLE -> "Eligible"
+                                QuestionnaireStatus.TEMP_DEFERRED -> "Temp. deferred"
+                                QuestionnaireStatus.NOT_ELIGIBLE -> "Not eligible"
+                            },
+                            type = when (s.questionnaireStatus) {
+                                QuestionnaireStatus.ELIGIBLE -> BadgeType.GREEN
+                                QuestionnaireStatus.TEMP_DEFERRED -> BadgeType.AMBER
+                                QuestionnaireStatus.NOT_ELIGIBLE -> BadgeType.RED
+                                QuestionnaireStatus.NOT_DONE -> BadgeType.GRAY
+                            }
+                        )
+                    }
+
+                    if (s.finalOutcome != FinalOutcome.NONE) {
+                        Spacer(Modifier.height(4.dp))
+                        SectionDivider()
+                        Spacer(Modifier.height(4.dp))
+                        Text("Staff Assessment", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = TextSecondary)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Final outcome", fontSize = 12.sp, color = TextPrimary)
+                            StatusBadge(
+                                text = s.finalOutcome.label,
+                                type = when (s.finalOutcome) {
+                                    FinalOutcome.DONATED -> BadgeType.GREEN
+                                    FinalOutcome.ACCEPTED_ONSITE -> BadgeType.GREEN
+                                    FinalOutcome.DEFERRED_ONSITE -> BadgeType.AMBER
+                                    FinalOutcome.NO_SHOW -> BadgeType.RED
+                                    else -> BadgeType.GRAY
+                                }
+                            )
+                        }
+                        if (!s.staffNotes.isNullOrBlank()) {
+                            Text("Notes: ${s.staffNotes}", fontSize = 11.sp, color = TextHint, modifier = Modifier.padding(top = 4.dp))
+                        }
+                    }
+
+                    Spacer(Modifier.height(4.dp))
+
+                    // Overall status banner
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                color = when (s.overallStatus) {
+                                    OverallStatus.ELIGIBLE -> androidx.compose.ui.graphics.Color(0xFFEAF3DE)
+                                    OverallStatus.TEMP_DEFERRED -> androidx.compose.ui.graphics.Color(0xFFFAEEDA)
+                                    OverallStatus.NOT_ELIGIBLE -> androidx.compose.ui.graphics.Color(0xFFFCEBEB)
+                                    OverallStatus.INCOMPLETE -> androidx.compose.ui.graphics.Color(0xFFF3F4F6)
+                                },
+                                shape = RoundedCornerShape(8.dp)
+                            )
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            text = when (s.overallStatus) {
+                                OverallStatus.ELIGIBLE -> "✓ Eligible for donation"
+                                OverallStatus.TEMP_DEFERRED -> "⏸ Temporarily deferred"
+                                OverallStatus.NOT_ELIGIBLE -> "✗ Not eligible"
+                                OverallStatus.INCOMPLETE -> "⋯ Screening incomplete"
+                            },
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = when (s.overallStatus) {
+                                OverallStatus.ELIGIBLE -> GreenText
+                                OverallStatus.TEMP_DEFERRED -> AmberText
+                                OverallStatus.NOT_ELIGIBLE -> BrandRedDark
+                                OverallStatus.INCOMPLETE -> TextHint
+                            }
+                        )
+                    }
+
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        "BloodLink pre-screening summary · Not a medical diagnosis",
+                        fontSize = 10.sp,
+                        color = TextHint,
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = TextAlign.Center
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { summaryDialog = null; outcomeDialog = s },
+                    colors = ButtonDefaults.buttonColors(containerColor = BrandRed)
+                ) { Text("Set outcome") }
+            },
+            dismissButton = { TextButton(onClick = { summaryDialog = null }) { Text("Close") } }
+        )
     }
 
     // Set outcome dialog
