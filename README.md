@@ -155,15 +155,15 @@ BloodLink/
 
 | Name | Role |
 |---|---|
-| [Your Name] | Lead Developer, ML Pipeline |
-| [Teammate 2] | [Role] |
-| [Teammate 3] | [Role] |
+| Tombo, Sebastian Louise C. | Lead Developer, ML Pipeline |
+| Madridano, Jawh Era | Project Manager |
+| Batislaon, Cyril | Member |
 
 ---
 
 ## License
 
-This project is developed as an undergraduate thesis at [Your University]. All rights reserved.
+This project is developed as an undergraduate thesis at FEU Institute of Technology. All rights reserved.
 
 ---
 
