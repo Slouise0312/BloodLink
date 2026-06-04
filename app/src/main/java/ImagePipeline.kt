@@ -384,6 +384,29 @@ object ImagePipeline {
         data class Fail(val reason: String) : QualityCheckResult()
     }
 
+    /**
+     * Downscale a bitmap so its longest edge is at most [maxDimension] pixels.
+     *
+     * Modern phone cameras produce 12-50MP images (4000x3000+).
+     * Processing these at full resolution:
+     *   - Allocates 48+ MB of heap just for the pixel array → OOM on 2-3GB phones
+     *   - Makes CLAHE, feature extraction, and TFLite inference 10-20x slower
+     *   - Provides ZERO benefit since the TFLite model resizes to 224x224 anyway
+     *
+     * This function downscales proportionally so no dimension exceeds [maxDimension].
+     * Returns the original bitmap unchanged if it's already small enough.
+     */
+    fun downscaleBitmap(bitmap: Bitmap, maxDimension: Int = 1024): Bitmap {
+        val w = bitmap.width
+        val h = bitmap.height
+        if (w <= maxDimension && h <= maxDimension) return bitmap
+        val scale = maxDimension.toFloat() / maxOf(w, h)
+        val newW = (w * scale).toInt().coerceAtLeast(1)
+        val newH = (h * scale).toInt().coerceAtLeast(1)
+        android.util.Log.d("BloodLink-Pipeline", "Downscaling ${w}x${h} → ${newW}x${newH}")
+        return Bitmap.createScaledBitmap(bitmap, newW, newH, true)
+    }
+
     fun checkImageQuality(bitmap: Bitmap, testId: String = ""): QualityCheckResult {
 
         if (bitmap.width < 200 || bitmap.height < 200) {

@@ -45,9 +45,10 @@ fun BloodLinkApp() {
 
         composable(Route.Auth.path) {
             LaunchedEffect(currentUser, needsRoleSelection) {
+                val user = currentUser  // snapshot — safe from recomposition race
                 when {
-                    currentUser != null && !needsRoleSelection -> {
-                        when (currentUser!!.role) {
+                    user != null && !needsRoleSelection -> {
+                        when (user.role) {
                             UserRole.APPLICANT -> navController.navigate(Route.Applicant.path) {
                                 popUpTo(Route.Auth.path) { inclusive = true }
                             }

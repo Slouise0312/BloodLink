@@ -9,6 +9,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.ui.res.painterResource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
@@ -44,7 +45,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -145,6 +148,48 @@ private fun OutlineButton(
         colors = ButtonDefaults.outlinedButtonColors(contentColor = BrandRed)
     ) {
         Text(text, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+/** Proper Google-branded sign-in button using the official Google logo vector drawable. */
+@Composable
+private fun GoogleSignInButton(
+    onClick: () -> Unit,
+    enabled: Boolean = true
+) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(48.dp),
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(1.dp, Color(0xFFDADADA)),
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = Color.White,
+            contentColor = Color(0xFF3C4043),
+            disabledContainerColor = Color.White.copy(alpha = 0.6f),
+            disabledContentColor = Color(0xFF3C4043).copy(alpha = 0.4f)
+        )
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Image(
+                painter = painterResource(id = R.drawable.ic_google_logo),
+                contentDescription = null,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(Modifier.width(12.dp))
+            Text(
+                text = "Sign in with Google",
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium,
+                color = Color(0xFF3C4043)
+            )
+        }
     }
 }
 
@@ -286,33 +331,18 @@ fun AuthScreen(authVm: AuthViewModel) {
     var name by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
     var showPrivacyConsent by remember { mutableStateOf(false) }
+    var pendingGoogleSignIn by remember { mutableStateOf(false) }
+    var showForgotPassword by remember { mutableStateOf(false) }
 
-    // Show full-screen privacy consent before creating account
-    if (showPrivacyConsent) {
-        ConsentScreen(
-            context = "signup",
-            onAccept = {
-                showPrivacyConsent = false
-                isLoading = true
-                authVm.signUp(name, email, pass, onSuccess = { isLoading = false }, onError = { isLoading = false })
-            },
-            onDecline = {
-                showPrivacyConsent = false
-            }
-        )
-        return
-    }
     val authError by authVm.authError.collectAsState()
+    val needsEmailVerification by authVm.needsEmailVerification.collectAsState()
+    val pendingVerificationEmail by authVm.pendingVerificationEmail.collectAsState()
     val context = LocalContext.current
 
     LaunchedEffect(authError) { if (authError != null) isLoading = false }
 
-    val webClientId = remember {
-        runCatching {
-            val resId = context.resources.getIdentifier("default_web_client_id", "string", context.packageName)
-            if (resId != 0) context.getString(resId) else null
-        }.getOrNull()
-    }
+    val webClientId = "343067117680-22sqbk66h5a9h1fg0eh94cdpr59bvfbf.apps.googleusercontent.com"
+
     val googleSignInClient = remember(webClientId) {
         webClientId?.let { id ->
             GoogleSignIn.getClient(
@@ -330,6 +360,54 @@ fun AuthScreen(authVm: AuthViewModel) {
                 authVm.signInWithGoogle(token, onSuccess = { isLoading = false }, onError = { isLoading = false })
             } ?: run { isLoading = false }
         } catch (_: ApiException) { isLoading = false }
+    }
+
+    // ── Email verification screen ────────────────────────────────────────
+    if (needsEmailVerification) {
+        EmailVerificationScreen(
+            email = pendingVerificationEmail ?: "",
+            password = pass,
+            authVm = authVm,
+            onBackToLogin = {
+                authVm.dismissEmailVerification()
+                isLogin = true
+                isLoading = false
+            }
+        )
+        return
+    }
+
+    // ── Forgot password dialog ───────────────────────────────────────────
+    if (showForgotPassword) {
+        ForgotPasswordDialog(
+            initialEmail = email,
+            authVm = authVm,
+            onDismiss = { showForgotPassword = false }
+        )
+    }
+
+    // Show full-screen privacy consent before creating account
+    if (showPrivacyConsent) {
+        ConsentScreen(
+            context = "signup",
+            onAccept = {
+                showPrivacyConsent = false
+                isLoading = true
+                if (pendingGoogleSignIn && googleSignInClient != null) {
+                    pendingGoogleSignIn = false
+                    googleSignInClient.signInIntent.let { intent ->
+                        googleLauncher.launch(intent)
+                    }
+                } else {
+                    authVm.signUp(name, email, pass, onSuccess = { isLoading = false }, onError = { isLoading = false })
+                }
+            },
+            onDecline = {
+                showPrivacyConsent = false
+                pendingGoogleSignIn = false
+            }
+        )
+        return
     }
 
     Column(
@@ -407,8 +485,20 @@ fun AuthScreen(authVm: AuthViewModel) {
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
                 )
 
+                // Forgot password link (only on login)
+                if (isLogin) {
+                    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+                        TextButton(
+                            onClick = { showForgotPassword = true },
+                            contentPadding = PaddingValues(0.dp)
+                        ) {
+                            Text("Forgot password?", color = BrandRed, fontSize = 12.sp)
+                        }
+                    }
+                }
+
                 if (authError != null) {
-                    Text(authError!!, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                    Text(authError.orEmpty(), color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
                 }
 
                 PrimaryButton(
@@ -427,14 +517,11 @@ fun AuthScreen(authVm: AuthViewModel) {
                 )
 
                 if (googleSignInClient != null) {
-                    OutlineButton(
-                        text = "Continue with Google",
+                    GoogleSignInButton(
                         onClick = {
-                            googleSignInClient.signInIntent.let { intent ->
-                                isLoading = true
-                                authVm.clearAuthError()
-                                googleLauncher.launch(intent)
-                            }
+                            authVm.clearAuthError()
+                            pendingGoogleSignIn = true
+                            showPrivacyConsent = true
                         },
                         enabled = !isLoading
                     )
@@ -461,6 +548,216 @@ fun AuthScreen(authVm: AuthViewModel) {
             textAlign = TextAlign.Center
         )
     }
+}
+
+// ─── EMAIL VERIFICATION SCREEN ──────────────────────────────────────────────
+
+@Composable
+private fun EmailVerificationScreen(
+    email: String,
+    password: String,
+    authVm: AuthViewModel,
+    onBackToLogin: () -> Unit
+) {
+    var resendMessage by remember { mutableStateOf<String?>(null) }
+    var isResending by remember { mutableStateOf(false) }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(SurfaceBg)
+            .padding(horizontal = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        // Email icon
+        Box(
+            Modifier
+                .size(64.dp)
+                .clip(CircleShape)
+                .background(BrandRedLight),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Outlined.Email,
+                contentDescription = null,
+                tint = BrandRed,
+                modifier = Modifier.size(32.dp)
+            )
+        }
+
+        Spacer(Modifier.height(24.dp))
+        Text(
+            "Verify your email",
+            fontSize = 20.sp,
+            fontWeight = FontWeight.Medium,
+            color = TextPrimary
+        )
+
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "We sent a verification link to:",
+            fontSize = 14.sp,
+            color = TextSecondary,
+            textAlign = TextAlign.Center
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            email,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+            color = TextPrimary,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Open the email and tap the link to verify your account. Then come back here and sign in.",
+            fontSize = 13.sp,
+            color = TextSecondary,
+            textAlign = TextAlign.Center,
+            lineHeight = 19.sp
+        )
+
+        if (resendMessage != null) {
+            Spacer(Modifier.height(12.dp))
+            Text(
+                resendMessage.orEmpty(),
+                fontSize = 12.sp,
+                color = if (resendMessage?.contains("sent") == true) Color(0xFF1D9E75) else MaterialTheme.colorScheme.error,
+                textAlign = TextAlign.Center
+            )
+        }
+
+        Spacer(Modifier.height(28.dp))
+
+        // Resend button
+        OutlineButton(
+            text = if (isResending) "Sending..." else "Resend verification email",
+            onClick = {
+                if (password.isNotBlank()) {
+                    isResending = true
+                    authVm.resendVerificationEmail(
+                        email = email,
+                        password = password,
+                        onSuccess = {
+                            resendMessage = "Verification email sent! Check your inbox."
+                            isResending = false
+                        },
+                        onError = { msg ->
+                            resendMessage = msg
+                            isResending = false
+                        }
+                    )
+                } else {
+                    resendMessage = "Please go back and sign in again to resend."
+                }
+            },
+            enabled = !isResending
+        )
+
+        Spacer(Modifier.height(12.dp))
+        PrimaryButton(
+            text = "Back to sign in",
+            onClick = onBackToLogin
+        )
+    }
+}
+
+// ─── FORGOT PASSWORD DIALOG ─────────────────────────────────────────────────
+
+@Composable
+private fun ForgotPasswordDialog(
+    initialEmail: String,
+    authVm: AuthViewModel,
+    onDismiss: () -> Unit
+) {
+    var resetEmail by remember { mutableStateOf(initialEmail) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var isSuccess by remember { mutableStateOf(false) }
+    var isSending by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = CardWhite,
+        shape = RoundedCornerShape(20.dp),
+        title = {
+            Text(
+                if (isSuccess) "Email sent!" else "Reset your password",
+                fontWeight = FontWeight.Medium,
+                fontSize = 17.sp,
+                color = TextPrimary
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (isSuccess) {
+                    Text(
+                        "We sent a password reset link to $resetEmail. Open the email and follow the instructions to set a new password.",
+                        fontSize = 13.sp,
+                        color = TextSecondary,
+                        lineHeight = 19.sp
+                    )
+                } else {
+                    Text(
+                        "Enter the email address you used to create your account. We'll send you a link to reset your password.",
+                        fontSize = 13.sp,
+                        color = TextSecondary,
+                        lineHeight = 19.sp
+                    )
+                    OutlinedTextField(
+                        value = resetEmail,
+                        onValueChange = { resetEmail = it; message = null },
+                        label = { Text("Email address") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)
+                    )
+                    if (message != null) {
+                        Text(message.orEmpty(), color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (isSuccess) {
+                TextButton(onClick = onDismiss) {
+                    Text("Done", color = BrandRed, fontWeight = FontWeight.Medium)
+                }
+            } else {
+                TextButton(
+                    onClick = {
+                        isSending = true
+                        authVm.sendPasswordResetEmail(
+                            email = resetEmail,
+                            onSuccess = {
+                                isSuccess = true
+                                isSending = false
+                            },
+                            onError = { msg ->
+                                message = msg
+                                isSending = false
+                            }
+                        )
+                    },
+                    enabled = !isSending
+                ) {
+                    Text(
+                        if (isSending) "Sending..." else "Send reset link",
+                        color = BrandRed,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+        },
+        dismissButton = {
+            if (!isSuccess) {
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel", color = TextSecondary)
+                }
+            }
+        }
+    )
 }
 
 // ─── ROLE SELECTION ──────────────────────────────────────────────────────────
@@ -562,7 +859,7 @@ fun RoleSelectionScreen(authVm: AuthViewModel, onRoleCreated: (UserRole) -> Unit
             }
 
             if (error != null) {
-                Text(error!!, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                Text(error.orEmpty(), color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
             }
 
             Spacer(Modifier.height(8.dp))
@@ -660,8 +957,8 @@ private fun ApplicantEventTab(
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
     Column(Modifier.fillMaxSize().background(SurfaceBg)) {
-        if (currentEvent != null) {
-            val ev = currentEvent!!
+        val ev = currentEvent
+        if (ev != null) {
             BrandTopBar(title = ev.title, subtitle = ev.location)
             Column(
                 Modifier
@@ -741,7 +1038,7 @@ private fun ApplicantEventTab(
                 )
 
                 if (error != null) {
-                    Text(error!!, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                    Text(error.orEmpty(), color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
                 }
 
                 PrimaryButton(
@@ -821,46 +1118,56 @@ private fun ApplicantScreeningTab(screeningVm: ScreeningViewModel, onShowMessage
     }
 
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
-        if (success && selectedTest != null) {
+        val test = selectedTest ?: return@rememberLauncherForActivityResult
+        if (success) {
             scope.launch {
                 try {
                     val file = currentPhotoFileRef.value ?: return@launch
-                    val bitmap = android.graphics.BitmapFactory.decodeFile(file.absolutePath)
-                    if (bitmap != null) {
-                        val check = ImagePipeline.checkImageQuality(bitmap, selectedTest!!.id)
+                    val result = withContext(Dispatchers.IO) {
+                        val raw = android.graphics.BitmapFactory.decodeFile(file.absolutePath)
+                            ?: return@withContext Triple<String?, TestResult?, Boolean>("Photo could not be read. Please try again.", null, true)
+                        val bitmap = ImagePipeline.downscaleBitmap(raw)
+                        val check = ImagePipeline.checkImageQuality(bitmap, test.id)
                         if (check is ImagePipeline.QualityCheckResult.Fail) {
-                            qualityError = check.reason
-                            lastResult = null
+                            Triple<String?, TestResult?, Boolean>(check.reason, null, false)
                         } else {
-                            qualityError = null
-                            lastResult = selectedTest!!.run(bitmap)
+                            Triple<String?, TestResult?, Boolean>(null, test.run(bitmap), false)
                         }
                     }
+                    qualityError = result.first
+                    lastResult = result.second
                 } catch (e: Exception) {
-                    android.util.Log.e("BloodLink", "Camera capture failed: ${e.message}")
+                    android.util.Log.e("BloodLink", "Camera capture failed: ${e.message}", e)
+                    qualityError = "Something went wrong processing the photo. Please try again."
                 }
             }
         }
     }
     val uploadLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        if (uri != null && selectedTest != null) {
+        val test = selectedTest ?: return@rememberLauncherForActivityResult
+        if (uri != null) {
             scope.launch {
                 try {
-                    val inputStream = context.contentResolver.openInputStream(uri)
-                    val bitmap = android.graphics.BitmapFactory.decodeStream(inputStream)
-                    inputStream?.close()
-                    if (bitmap != null) {
-                        val check = ImagePipeline.checkImageQuality(bitmap, selectedTest!!.id)
+                    val result = withContext(Dispatchers.IO) {
+                        val inputStream = context.contentResolver.openInputStream(uri)
+                        val raw = android.graphics.BitmapFactory.decodeStream(inputStream)
+                        inputStream?.close()
+                        if (raw == null) {
+                            return@withContext Triple<String?, TestResult?, Boolean>("Photo could not be read. Please try a different image.", null, true)
+                        }
+                        val bitmap = ImagePipeline.downscaleBitmap(raw)
+                        val check = ImagePipeline.checkImageQuality(bitmap, test.id)
                         if (check is ImagePipeline.QualityCheckResult.Fail) {
-                            qualityError = check.reason
-                            lastResult = null
+                            Triple<String?, TestResult?, Boolean>(check.reason, null, false)
                         } else {
-                            qualityError = null
-                            lastResult = selectedTest!!.run(bitmap)
+                            Triple<String?, TestResult?, Boolean>(null, test.run(bitmap), false)
                         }
                     }
+                    qualityError = result.first
+                    lastResult = result.second
                 } catch (e: Exception) {
-                    android.util.Log.e("BloodLink", "Image upload failed: ${e.message}")
+                    android.util.Log.e("BloodLink", "Image upload failed: ${e.message}", e)
+                    qualityError = "Something went wrong processing the image. Please try again."
                 }
             }
         }
@@ -968,11 +1275,11 @@ private fun ApplicantScreeningTab(screeningVm: ScreeningViewModel, onShowMessage
 
             if (selectedTest != null) {
                 BrandCard {
-                    Text(selectedTest!!.title, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = TextPrimary)
+                    Text(selectedTest?.title ?: "", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = TextPrimary)
                     Spacer(Modifier.height(8.dp))
 
                     // ── Positioning guide per test ──────────────────────────
-                    val guideText = when (selectedTest!!.id) {
+                    val guideText = when (selectedTest?.id) {
                         "pallor"   -> "👁 Pull your lower eyelid down so the pink inner surface is visible. Hold your phone 20–30 cm from your eye in good lighting, then take the photo."
                         "jaundice" -> "👁 Look slightly upward so the white part of your eye is well exposed. Hold your phone 20–30 cm away in good lighting, then take the photo."
                         "cyanosis" -> "✋ Hold your hand flat with fingernails facing the camera, filling the frame. Use white or natural lighting. Remove nail polish if present."
@@ -1716,7 +2023,7 @@ private fun StaffEventsTab(authVm: AuthViewModel, eventVm: EventViewModel, onSho
             title = { Text("Create new event") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    if (createError != null) Text(createError!!, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                    if (createError != null) Text(createError.orEmpty(), color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
                     OutlinedTextField(value = newTitle, onValueChange = { newTitle = it }, label = { Text("Event title") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                     OutlinedTextField(value = newLocation, onValueChange = { newLocation = it }, label = { Text("Location") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                 }
@@ -1748,7 +2055,7 @@ private fun StaffEventsTab(authVm: AuthViewModel, eventVm: EventViewModel, onSho
             title = { Text("Edit event") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    if (editError != null) Text(editError!!, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                    if (editError != null) Text(editError.orEmpty(), color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
                     OutlinedTextField(value = editTitle, onValueChange = { editTitle = it }, label = { Text("Event title") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                     OutlinedTextField(value = editLocation, onValueChange = { editLocation = it }, label = { Text("Location") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                 }
@@ -2142,7 +2449,7 @@ private fun StaffApplicantsTab(eventVm: EventViewModel, staffVm: StaffApplicants
             title = { Text("Set outcome — ${s.applicantName ?: s.applicantUid.take(8)}") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (errMsg != null) Text(errMsg!!, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                    if (errMsg != null) Text(errMsg.orEmpty(), color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
                     Text("Final outcome:", fontSize = 12.sp, color = TextSecondary)
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         FinalOutcome.entries.filter { it != FinalOutcome.NONE }.forEach { o ->
@@ -2267,7 +2574,7 @@ private fun StaffVerifyTab(staffVm: StaffApplicantsViewModel, onShowMessage: (St
             )
 
             if (notFound) Text("Screening not found. Check the ID or scan the donor's QR again.", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
-            if (error != null) Text(error!!, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+            if (error != null) Text(error.orEmpty(), color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
 
             PrimaryButton(
                 text = "Load screening",
@@ -2560,7 +2867,7 @@ private fun StaffSettingsTab(authVm: AuthViewModel, onLogout: () -> Unit, alerts
                         enabled = !orgIdSaving
                     )
                     if (orgIdError != null) {
-                        Text(orgIdError!!, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                        Text(orgIdError.orEmpty(), color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
                     }
                     Spacer(Modifier.height(10.dp))
                     PrimaryButton(
@@ -2888,4 +3195,4 @@ private fun ConsentPoint(
             fontWeight = if (highlight) FontWeight.Medium else FontWeight.Normal
         )
     }
-}
+} 

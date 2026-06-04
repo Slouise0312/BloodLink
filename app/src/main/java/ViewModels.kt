@@ -29,8 +29,26 @@ class AuthViewModel(
     private val _needsRoleSelection = MutableStateFlow(false)
     val needsRoleSelection: StateFlow<Boolean> = _needsRoleSelection.asStateFlow()
 
+    /** True after sign-up while the user hasn't verified their email yet. */
+    private val _needsEmailVerification = MutableStateFlow(false)
+    val needsEmailVerification: StateFlow<Boolean> = _needsEmailVerification.asStateFlow()
+
+    /** Holds the email address for display on the verification screen. */
+    private val _pendingVerificationEmail = MutableStateFlow<String?>(null)
+    val pendingVerificationEmail: StateFlow<String?> = _pendingVerificationEmail.asStateFlow()
+
+    /**
+     * When true, the AuthStateListener does nothing.
+     * This prevents a race condition during sign-up:
+     *   createUserWithEmailAndPassword → Firebase auto-signs-in → listener fires →
+     *   navigates to RoleSelection BEFORE signUp() can send the verification email.
+     * Set to true before sign-up, cleared after verification email is sent + sign-out.
+     */
+    private var suppressAuthListener = false
+
     init {
         auth.addAuthStateListener { firebaseAuth ->
+            if (suppressAuthListener) return@addAuthStateListener
             val user = firebaseAuth.currentUser
             if (user != null) {
                 loadUserProfile(user.uid)
@@ -110,7 +128,18 @@ class AuthViewModel(
         }
         auth.signInWithEmailAndPassword(email.trim(), password)
             .addOnSuccessListener {
-                val uid = auth.currentUser?.uid ?: run { onError("Sign in failed"); return@addOnSuccessListener }
+                val firebaseUser = auth.currentUser
+                val uid = firebaseUser?.uid ?: run { onError("Sign in failed"); return@addOnSuccessListener }
+
+                // Block unverified email users — force them to verify first
+                if (firebaseUser.isEmailVerified != true) {
+                    _pendingVerificationEmail.value = firebaseUser.email
+                    _needsEmailVerification.value = true
+                    auth.signOut()  // sign out so they can't bypass
+                    onError("Please verify your email before signing in. Check your inbox.")
+                    return@addOnSuccessListener
+                }
+
                 loadUserProfile(uid) { profile -> onSuccess(profile) }
             }
             .addOnFailureListener { e ->
@@ -129,18 +158,118 @@ class AuthViewModel(
             onError("Password must be at least 6 characters")
             return
         }
+
+        // Suppress the auth state listener so it doesn't hijack the flow
+        // before we can send the verification email
+        suppressAuthListener = true
+
         auth.createUserWithEmailAndPassword(email.trim(), password)
             .addOnSuccessListener {
-                val uid = auth.currentUser?.uid ?: run { onError("Sign up failed"); return@addOnSuccessListener }
-                loadUserProfile(uid) { profile -> onSuccess(profile) }
+                val firebaseUser = auth.currentUser ?: run {
+                    suppressAuthListener = false
+                    onError("Sign up failed")
+                    return@addOnSuccessListener
+                }
+
+                // Update display name
+                val profileUpdates = com.google.firebase.auth.UserProfileChangeRequest.Builder()
+                    .setDisplayName(name.trim())
+                    .build()
+                firebaseUser.updateProfile(profileUpdates)
+
+                // Send verification email
+                firebaseUser.sendEmailVerification()
+                    .addOnSuccessListener {
+                        android.util.Log.d("BloodLink-Auth", "Verification email sent to ${firebaseUser.email}")
+                        _pendingVerificationEmail.value = firebaseUser.email
+                        _needsEmailVerification.value = true
+                        // Sign out — they can only proceed after verifying
+                        auth.signOut()
+                        suppressAuthListener = false
+                        onSuccess(null)
+                    }
+                    .addOnFailureListener { e ->
+                        android.util.Log.e("BloodLink-Auth", "Failed to send verification: ${e.message}")
+                        // Still show verification screen — account was created
+                        _pendingVerificationEmail.value = firebaseUser.email
+                        _needsEmailVerification.value = true
+                        auth.signOut()
+                        suppressAuthListener = false
+                        onSuccess(null)
+                    }
             }
             .addOnFailureListener { e ->
+                suppressAuthListener = false
                 _authError.value = e.message
                 onError(e.message ?: "Sign up failed")
             }
     }
 
-    /** Sign in with Google ID token (from GoogleSignIn). Calls onSuccess(profile) or onError. */
+    /** Send a password reset email. Firebase handles the email + reset link. */
+    fun sendPasswordResetEmail(email: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        _authError.value = null
+        if (email.isBlank()) {
+            onError("Please enter your email address")
+            return
+        }
+        auth.sendPasswordResetEmail(email.trim())
+            .addOnSuccessListener {
+                android.util.Log.d("BloodLink-Auth", "Password reset email sent to $email")
+                onSuccess()
+            }
+            .addOnFailureListener { e ->
+                _authError.value = e.message
+                onError(e.message ?: "Failed to send reset email")
+            }
+    }
+
+    /** Re-send the verification email. Requires the user to sign in briefly. */
+    fun resendVerificationEmail(email: String, password: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        // Suppress listener — we're signing in temporarily just to resend the email
+        suppressAuthListener = true
+
+        auth.signInWithEmailAndPassword(email.trim(), password)
+            .addOnSuccessListener {
+                val user = auth.currentUser
+                if (user != null && user.isEmailVerified != true) {
+                    user.sendEmailVerification()
+                        .addOnSuccessListener {
+                            auth.signOut()
+                            suppressAuthListener = false
+                            onSuccess()
+                        }
+                        .addOnFailureListener { e ->
+                            auth.signOut()
+                            suppressAuthListener = false
+                            onError(e.message ?: "Failed to resend")
+                        }
+                } else {
+                    auth.signOut()
+                    suppressAuthListener = false
+                    onError("Email already verified — please sign in.")
+                }
+            }
+            .addOnFailureListener { e ->
+                suppressAuthListener = false
+                onError(e.message ?: "Could not resend verification email")
+            }
+    }
+
+    /** Dismiss the email verification screen and go back to login. */
+    fun dismissEmailVerification() {
+        _needsEmailVerification.value = false
+        _pendingVerificationEmail.value = null
+        _authError.value = null
+    }
+
+    /** Sign in with Google ID token (from GoogleSignIn). Calls onSuccess(profile) or onError.
+     *
+     * Role assignment rules (Option A):
+     *  - If a Firestore doc already exists for this UID (pre-assigned by admin) → use that role.
+     *  - If NO doc exists (brand-new Google user) → automatically create as APPLICANT.
+     *  - Staff / Admin / EventStaff roles can ONLY be assigned by an admin directly in Firestore.
+     *    Google sign-in will NEVER prompt the user to pick a role.
+     */
     fun signInWithGoogle(idToken: String, onSuccess: (AppUser?) -> Unit, onError: (String) -> Unit) {
         _authError.value = null
         if (idToken.isBlank()) {
@@ -151,7 +280,53 @@ class AuthViewModel(
         auth.signInWithCredential(credential)
             .addOnSuccessListener {
                 val uid = auth.currentUser?.uid ?: run { onError("Sign in failed"); return@addOnSuccessListener }
-                loadUserProfile(uid) { profile -> onSuccess(profile) }
+                val email = auth.currentUser?.email ?: ""
+                val name = auth.currentUser?.displayName ?: email.substringBefore("@")
+                // Check if a Firestore doc already exists for this user
+                userDoc(uid).get()
+                    .addOnSuccessListener { doc ->
+                        if (doc != null && doc.exists()) {
+                            // Doc exists — load whatever role admin pre-assigned (or previous session)
+                            val roleStr = doc.getString("role")?.takeIf { it.isNotBlank() }
+                            val role = roleStr?.let { UserRole.entries.find { r -> r.name == it } } ?: UserRole.APPLICANT
+                            val orgId = doc.getString("orgId")?.takeIf { it.isNotBlank() }
+                            val phone = doc.getString("phone") ?: ""
+                            val createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
+                            val updatedAt = doc.getLong("updatedAt") ?: System.currentTimeMillis()
+                            val appUser = AppUser(id = uid, role = role, name = name, email = email, phone = phone, orgId = orgId, createdAt = createdAt, updatedAt = updatedAt)
+                            _loggedInUser.value = appUser
+                            _needsRoleSelection.value = false
+                            FcmTokenHelper.updateTokenForUser(uid)
+                            onSuccess(appUser)
+                        } else {
+                            // No doc — brand new Google user → auto-create as APPLICANT (no role selection)
+                            val now = System.currentTimeMillis()
+                            val data = hashMapOf<String, Any>(
+                                "name" to name,
+                                "email" to email,
+                                "phone" to "",
+                                "role" to UserRole.APPLICANT.name,
+                                "createdAt" to now,
+                                "updatedAt" to now
+                            )
+                            userDoc(uid).set(data, com.google.firebase.firestore.SetOptions.merge())
+                                .addOnSuccessListener {
+                                    val appUser = AppUser(id = uid, role = UserRole.APPLICANT, name = name, email = email, orgId = null, createdAt = now, updatedAt = now)
+                                    _loggedInUser.value = appUser
+                                    _needsRoleSelection.value = false
+                                    FcmTokenHelper.updateTokenForUser(uid)
+                                    onSuccess(appUser)
+                                }
+                                .addOnFailureListener { e ->
+                                    _authError.value = e.message
+                                    onError(e.message ?: "Failed to create profile")
+                                }
+                        }
+                    }
+                    .addOnFailureListener { e ->
+                        _authError.value = e.message
+                        onError(e.message ?: "Google sign-in failed")
+                    }
             }
             .addOnFailureListener { e ->
                 _authError.value = e.message
