@@ -1,11 +1,31 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // User profiles: users can read/write their own document
+
+    // ── USERS ──────────────────────────────────────────────────────────────
+    // Users can READ their own doc.
+    // Users can CREATE their own doc (first sign-up) but CANNOT set role to STAFF/ADMIN.
+    // Users can UPDATE their own doc but CANNOT change: role, orgId, createdAt.
+    // Only Cloud Functions or Firebase Admin SDK (server-side) can change role/orgId.
     match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read: if request.auth != null && request.auth.uid == userId;
+
+      // First-time profile creation — role must be APPLICANT
+      allow create: if request.auth != null
+        && request.auth.uid == userId
+        && request.resource.data.role == 'APPLICANT';
+
+      // Updates — block sensitive fields from being changed by the user
+      allow update: if request.auth != null
+        && request.auth.uid == userId
+        && request.resource.data.role == resource.data.role        // role cannot change
+        && request.resource.data.createdAt == resource.data.createdAt;  // createdAt is immutable
+
+      // Users cannot delete their own profile
+      allow delete: if false;
     }
-    // Alerts: owner can read/update/delete; owner OR STAFF/ADMIN can create (so staff can create alerts for applicants)
+
+    // ── ALERTS ─────────────────────────────────────────────────────────────
     match /users/{userId}/alerts/{alertId} {
       allow read, update, delete: if request.auth != null && request.auth.uid == userId;
       allow create: if request.auth != null
@@ -14,15 +34,25 @@ service cloud.firestore {
                 && (get(path('databases', database, 'documents', 'users', request.auth.uid)).data.get('role', '') == 'STAFF'
                     || get(path('databases', database, 'documents', 'users', request.auth.uid)).data.get('role', '') == 'ADMIN')));
     }
-    // Organizations: staff/admin can read their org (by orgId from user doc)
+
+    // ── ORGANIZATIONS ──────────────────────────────────────────────────────
     match /organizations/{orgId} {
-      allow read: if request.auth != null && get(path('databases', database, 'documents', 'users', request.auth.uid)).data != null && get(path('databases', database, 'documents', 'users', request.auth.uid)).data.orgId == orgId;
+      allow read: if request.auth != null
+        && get(path('databases', database, 'documents', 'users', request.auth.uid)).data != null
+        && get(path('databases', database, 'documents', 'users', request.auth.uid)).data.orgId == orgId;
       allow write: if false;
     }
-    // Events: any signed-in user can read (list); any signed-in can create; creator or STAFF/ADMIN can update/delete (STAFF only for their org)
+
+    // ── EVENTS ─────────────────────────────────────────────────────────────
+    // Only STAFF or ADMIN can create events (not APPLICANT)
     match /events/{eventId} {
       allow read: if request.auth != null;
-      allow create: if request.auth != null;
+
+      allow create: if request.auth != null
+        && exists(path('databases', database, 'documents', 'users', request.auth.uid))
+        && (get(path('databases', database, 'documents', 'users', request.auth.uid)).data.get('role', '') == 'STAFF'
+            || get(path('databases', database, 'documents', 'users', request.auth.uid)).data.get('role', '') == 'ADMIN');
+
       allow update, delete: if request.auth != null
         && (
           resource.data.get('createdByUid', '') == request.auth.uid
@@ -35,11 +65,13 @@ service cloud.firestore {
               ))
         );
     }
-    // Screenings: applicant read/write own; staff/admin read/update for their org
+
+    // ── SCREENINGS ─────────────────────────────────────────────────────────
     match /screenings/{screeningId} {
       allow read, update: if request.auth != null && (
         resource.data.applicantUid == request.auth.uid
-        || (get(path('databases', database, 'documents', 'users', request.auth.uid)).data != null && get(path('databases', database, 'documents', 'users', request.auth.uid)).data.orgId == resource.data.orgId)
+        || (get(path('databases', database, 'documents', 'users', request.auth.uid)).data != null
+            && get(path('databases', database, 'documents', 'users', request.auth.uid)).data.orgId == resource.data.orgId)
       );
       allow create: if request.auth != null && request.resource.data.applicantUid == request.auth.uid;
       allow delete: if false;

@@ -20,7 +20,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -83,6 +84,9 @@ dependencies {
     implementation("com.google.firebase:firebase-auth-ktx")
     implementation("com.google.firebase:firebase-firestore-ktx")
     implementation("com.google.firebase:firebase-messaging-ktx")
+
+    // Firebase App Check — blocks API calls from outside your app
+    implementation("com.google.firebase:firebase-appcheck-playintegrity")
 
     // ML Kit Face Detection (ROI for pallor/jaundice)
     implementation("com.google.mlkit:face-detection:16.1.6")
