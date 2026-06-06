@@ -18,7 +18,6 @@ import androidx.navigation.compose.rememberNavController
 
 sealed class Route(val path: String) {
     data object Auth : Route("auth")
-    data object RoleSelection : Route("role_selection")
     data object Consent : Route("consent")
     data object Applicant : Route("applicant")
     data object Staff : Route("staff")
@@ -29,7 +28,6 @@ fun BloodLinkApp() {
     val navController = rememberNavController()
     val authVm: AuthViewModel = viewModel()
     val currentUser by authVm.loggedInUser.collectAsState()
-    val needsRoleSelection by authVm.needsRoleSelection.collectAsState()
     val context = LocalContext.current
     val notificationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
@@ -44,55 +42,31 @@ fun BloodLinkApp() {
     NavHost(navController, startDestination = Route.Consent.path) {
 
         composable(Route.Auth.path) {
-            LaunchedEffect(currentUser, needsRoleSelection) {
+            LaunchedEffect(currentUser) {
                 val user = currentUser  // snapshot — safe from recomposition race
-                when {
-                    user != null && !needsRoleSelection -> {
-                        when (user.role) {
-                            UserRole.APPLICANT -> navController.navigate(Route.Applicant.path) {
-                                popUpTo(Route.Auth.path) { inclusive = true }
-                            }
-                            UserRole.STAFF, UserRole.ADMIN -> navController.navigate(Route.Staff.path) {
-                                popUpTo(Route.Auth.path) { inclusive = true }
-                            }
+                if (user != null) {
+                    when (user.role) {
+                        UserRole.APPLICANT -> navController.navigate(Route.Applicant.path) {
+                            popUpTo(Route.Auth.path) { inclusive = true }
                         }
-                    }
-                    needsRoleSelection -> navController.navigate(Route.RoleSelection.path) {
-                        popUpTo(Route.Auth.path) { inclusive = true }
+                        UserRole.STAFF, UserRole.ADMIN -> navController.navigate(Route.Staff.path) {
+                            popUpTo(Route.Auth.path) { inclusive = true }
+                        }
                     }
                 }
             }
             AuthScreen(authVm = authVm)
         }
 
-        composable(Route.RoleSelection.path) {
-            RoleSelectionScreen(
-                authVm = authVm,
-                onRoleCreated = { role ->
-                    when (role) {
-                        UserRole.APPLICANT -> navController.navigate(Route.Applicant.path) {
-                            popUpTo(Route.RoleSelection.path) { inclusive = true }
-                        }
-                        UserRole.STAFF, UserRole.ADMIN -> navController.navigate(Route.Staff.path) {
-                            popUpTo(Route.RoleSelection.path) { inclusive = true }
-                        }
-                        else -> { }
-                    }
-                }
-            )
-        }
-
         composable(Route.Consent.path) {
             ConsentScreen(
                 onAccept = {
-                    // After accepting consent, proceed to authentication
                     navController.navigate(Route.Auth.path) {
                         popUpTo(Route.Consent.path) { inclusive = true }
                     }
                 },
                 onDecline = {
-                    // User declined — stay on consent screen (they can't proceed without consent)
-                    // Or you could finish the activity here
+                    // User declined — stay on consent screen
                 }
             )
         }

@@ -15,14 +15,13 @@ service cloud.firestore {
         && request.auth.uid == userId
         && request.resource.data.role == 'APPLICANT';
 
-      // Updates — block sensitive fields from being changed by the user
+      // Updates — only block role changes (the critical security check)
       allow update: if request.auth != null
         && request.auth.uid == userId
-        && request.resource.data.role == resource.data.role        // role cannot change
-        && request.resource.data.createdAt == resource.data.createdAt;  // createdAt is immutable
+        && request.resource.data.role == resource.data.role;
 
-      // Users cannot delete their own profile
-      allow delete: if false;
+      // Users can delete their own profile (RA 10173 Right to Erasure)
+      allow delete: if request.auth != null && request.auth.uid == userId;
     }
 
     // ── ALERTS ─────────────────────────────────────────────────────────────
@@ -74,7 +73,8 @@ service cloud.firestore {
             && get(path('databases', database, 'documents', 'users', request.auth.uid)).data.orgId == resource.data.orgId)
       );
       allow create: if request.auth != null && request.resource.data.applicantUid == request.auth.uid;
-      allow delete: if false;
+      // Users can delete their own screenings (RA 10173 Right to Erasure)
+      allow delete: if request.auth != null && resource.data.applicantUid == request.auth.uid;
     }
   }
 }

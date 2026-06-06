@@ -144,14 +144,18 @@ object ImagePipeline {
     private const val CLIP_LIMIT = 2.0f
 
     /**
-     * Apply CLAHE on the L (luminance) channel. Input bitmap is RGB; we use grayscale as L.
-     * Returns a new bitmap (same size) with L channel equalized; R=G=B for output (grayscale display).
+     * Apply CLAHE on the L (luminance) channel while PRESERVING original color.
+     * Input bitmap is RGB. We extract luminance, apply CLAHE, then scale
+     * the original RGB values by (newL / oldL) to keep color information intact.
+     * This is critical for pallor, jaundice, and cyanosis detection which are color-dependent.
      */
     fun applyClaheOnL(bitmap: Bitmap): Bitmap {
         val w = bitmap.width
         val h = bitmap.height
         val pixels = IntArray(w * h)
         bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
+
+        // Extract luminance channel
         val gray = FloatArray(w * h)
         for (i in pixels.indices) {
             val r = Color.red(pixels[i]) / 255f
@@ -159,13 +163,27 @@ object ImagePipeline {
             val b = Color.blue(pixels[i]) / 255f
             gray[i] = 0.299f * r + 0.587f * g + 0.114f * b
         }
+
+        // Save original luminance before CLAHE
+        val originalGray = gray.copyOf()
+
+        // Apply CLAHE on luminance
         clahe1D(gray, w, h)
-        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+
+        // Reconstruct RGB by scaling original colors with luminance ratio
         val outPixels = IntArray(w * h)
-        for (i in gray.indices) {
-            val v = (gray[i].coerceIn(0f, 1f) * 255).toInt()
-            outPixels[i] = Color.rgb(v, v, v)
+        for (i in pixels.indices) {
+            val oldL = originalGray[i].coerceAtLeast(0.001f)  // avoid div by zero
+            val newL = gray[i].coerceIn(0f, 1f)
+            val scale = newL / oldL
+
+            val r = (Color.red(pixels[i]) * scale).toInt().coerceIn(0, 255)
+            val g = (Color.green(pixels[i]) * scale).toInt().coerceIn(0, 255)
+            val b = (Color.blue(pixels[i]) * scale).toInt().coerceIn(0, 255)
+            outPixels[i] = Color.rgb(r, g, b)
         }
+
+        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         out.setPixels(outPixels, 0, w, 0, 0, w, h)
         return out
     }

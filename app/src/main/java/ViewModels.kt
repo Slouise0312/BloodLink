@@ -75,21 +75,43 @@ class AuthViewModel(
                     val updatedAt = (doc.getLong("updatedAt") ?: 0L)
                     val appUser = AppUser(id = uid, role = role, name = name, email = email, phone = phone, orgId = orgId, createdAt = createdAt, updatedAt = updatedAt)
                     _loggedInUser.value = appUser
-                    // Show role selection if: no valid role, or STAFF/ADMIN without orgId (needed for events)
-                    val needsRole = roleStr == null || (role == UserRole.STAFF || role == UserRole.ADMIN) && orgId == null
-                    _needsRoleSelection.value = needsRole
-                    if (!needsRole) FcmTokenHelper.updateTokenForUser(uid)
+                    _needsRoleSelection.value = false
+                    FcmTokenHelper.updateTokenForUser(uid)
                     onLoaded?.invoke(appUser)
                 } else {
-                    _loggedInUser.value = null
-                    _needsRoleSelection.value = true
-                    onLoaded?.invoke(null)
+                    // No doc exists — auto-create as APPLICANT (no role selection)
+                    // Staff/Admin roles are ONLY assigned manually in Firebase Console.
+                    val email = auth.currentUser?.email ?: ""
+                    val name = auth.currentUser?.displayName ?: email.substringBefore("@")
+                    val now = System.currentTimeMillis()
+                    val data = hashMapOf<String, Any>(
+                        "name" to name,
+                        "email" to email,
+                        "phone" to "",
+                        "role" to UserRole.APPLICANT.name,
+                        "createdAt" to now,
+                        "updatedAt" to now
+                    )
+                    userDoc(uid).set(data, com.google.firebase.firestore.SetOptions.merge())
+                        .addOnSuccessListener {
+                            val appUser = AppUser(id = uid, role = UserRole.APPLICANT, name = name, email = email, orgId = null, createdAt = now, updatedAt = now)
+                            _loggedInUser.value = appUser
+                            _needsRoleSelection.value = false
+                            FcmTokenHelper.updateTokenForUser(uid)
+                            onLoaded?.invoke(appUser)
+                        }
+                        .addOnFailureListener { e ->
+                            _authError.value = e.message
+                            _loggedInUser.value = null
+                            _needsRoleSelection.value = false
+                            onLoaded?.invoke(null)
+                        }
                 }
             }
             .addOnFailureListener {
                 _authError.value = "Could not load profile. Check your connection."
                 _loggedInUser.value = null
-                _needsRoleSelection.value = true
+                _needsRoleSelection.value = false
                 onLoaded?.invoke(null)
             }
     }
@@ -126,23 +148,34 @@ class AuthViewModel(
             onError("Email and password are required")
             return
         }
+        suppressAuthListener = true
+
         auth.signInWithEmailAndPassword(email.trim(), password)
             .addOnSuccessListener {
                 val firebaseUser = auth.currentUser
-                val uid = firebaseUser?.uid ?: run { onError("Sign in failed"); return@addOnSuccessListener }
+                val uid = firebaseUser?.uid ?: run {
+                    suppressAuthListener = false
+                    onError("Sign in failed")
+                    return@addOnSuccessListener
+                }
 
                 // Block unverified email users — force them to verify first
                 if (firebaseUser.isEmailVerified != true) {
                     _pendingVerificationEmail.value = firebaseUser.email
                     _needsEmailVerification.value = true
                     auth.signOut()  // sign out so they can't bypass
+                    suppressAuthListener = false
                     onError("Please verify your email before signing in. Check your inbox.")
                     return@addOnSuccessListener
                 }
 
-                loadUserProfile(uid) { profile -> onSuccess(profile) }
+                loadUserProfile(uid) { profile ->
+                    suppressAuthListener = false
+                    onSuccess(profile)
+                }
             }
             .addOnFailureListener { e ->
+                suppressAuthListener = false
                 _authError.value = e.message
                 onError(e.message ?: "Login failed")
             }
@@ -276,10 +309,19 @@ class AuthViewModel(
             onError("Google sign-in failed: no token")
             return
         }
+        // Suppress auth listener to prevent race condition —
+        // without this, both loadUserProfile AND this callback try to create the doc
+        // simultaneously with different createdAt values, causing PERMISSION_DENIED.
+        suppressAuthListener = true
+
         val credential = GoogleAuthProvider.getCredential(idToken, null)
         auth.signInWithCredential(credential)
             .addOnSuccessListener {
-                val uid = auth.currentUser?.uid ?: run { onError("Sign in failed"); return@addOnSuccessListener }
+                val uid = auth.currentUser?.uid ?: run {
+                    suppressAuthListener = false
+                    onError("Sign in failed")
+                    return@addOnSuccessListener
+                }
                 val email = auth.currentUser?.email ?: ""
                 val name = auth.currentUser?.displayName ?: email.substringBefore("@")
                 // Check if a Firestore doc already exists for this user
@@ -297,6 +339,7 @@ class AuthViewModel(
                             _loggedInUser.value = appUser
                             _needsRoleSelection.value = false
                             FcmTokenHelper.updateTokenForUser(uid)
+                            suppressAuthListener = false
                             onSuccess(appUser)
                         } else {
                             // No doc — brand new Google user → auto-create as APPLICANT (no role selection)
@@ -315,21 +358,25 @@ class AuthViewModel(
                                     _loggedInUser.value = appUser
                                     _needsRoleSelection.value = false
                                     FcmTokenHelper.updateTokenForUser(uid)
+                                    suppressAuthListener = false
                                     onSuccess(appUser)
                                 }
                                 .addOnFailureListener { e ->
                                     _authError.value = e.message
+                                    suppressAuthListener = false
                                     onError(e.message ?: "Failed to create profile")
                                 }
                         }
                     }
                     .addOnFailureListener { e ->
                         _authError.value = e.message
+                        suppressAuthListener = false
                         onError(e.message ?: "Google sign-in failed")
                     }
             }
             .addOnFailureListener { e ->
                 _authError.value = e.message
+                suppressAuthListener = false
                 onError(e.message ?: "Google sign-in failed")
             }
     }
@@ -359,6 +406,68 @@ class AuthViewModel(
                 onSuccess()
             }
             .addOnFailureListener { e -> onError(e.message ?: "Failed to save") }
+    }
+
+    /**
+     * Delete the user's account and ALL associated data.
+     * RA 10173 (Data Privacy Act of 2012) — Right to Erasure.
+     *
+     * Deletes: user doc, alerts subcollection, screening records, Firebase Auth account.
+     * Requires the user to be recently authenticated (Firebase requires this for delete).
+     */
+    fun deleteAccount(onSuccess: () -> Unit, onError: (String) -> Unit) {
+        val user = auth.currentUser ?: run { onError("Not signed in"); return }
+        val uid = user.uid
+
+        // Step 1: Delete alerts subcollection
+        firestore.collection(COLLECTION_USERS).document(uid)
+            .collection("alerts").get()
+            .addOnSuccessListener { snapshot ->
+                val batch = firestore.batch()
+                for (doc in snapshot.documents) {
+                    batch.delete(doc.reference)
+                }
+
+                // Step 2: Delete user's screening records
+                firestore.collection("screenings")
+                    .whereEqualTo("applicantUid", uid)
+                    .get()
+                    .addOnSuccessListener { screenings ->
+                        for (doc in screenings.documents) {
+                            batch.delete(doc.reference)
+                        }
+
+                        // Step 3: Delete user document
+                        batch.delete(firestore.collection(COLLECTION_USERS).document(uid))
+
+                        // Step 4: Commit all Firestore deletions
+                        batch.commit()
+                            .addOnSuccessListener {
+                                // Step 5: Delete Firebase Auth account
+                                user.delete()
+                                    .addOnSuccessListener {
+                                        _loggedInUser.value = null
+                                        _needsRoleSelection.value = false
+                                        android.util.Log.d("BloodLink-Auth", "Account fully deleted for UID: $uid")
+                                        onSuccess()
+                                    }
+                                    .addOnFailureListener { e ->
+                                        // Auth deletion failed — data is already gone
+                                        // Most common reason: user needs to re-authenticate
+                                        auth.signOut()
+                                        _loggedInUser.value = null
+                                        if (e.message?.contains("requires recent authentication") == true) {
+                                            onError("Please sign in again and try deleting immediately — Firebase requires a recent sign-in for account deletion.")
+                                        } else {
+                                            onError(e.message ?: "Failed to delete auth account")
+                                        }
+                                    }
+                            }
+                            .addOnFailureListener { e -> onError(e.message ?: "Failed to delete data") }
+                    }
+                    .addOnFailureListener { e -> onError(e.message ?: "Failed to find screenings") }
+            }
+            .addOnFailureListener { e -> onError(e.message ?: "Failed to delete alerts") }
     }
 
     fun logout() {

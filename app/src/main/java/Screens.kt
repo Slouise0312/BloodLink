@@ -1421,6 +1421,14 @@ private fun ApplicantScreeningTab(screeningVm: ScreeningViewModel, onShowMessage
                             },
                             loading = saving
                         )
+                        Spacer(Modifier.height(8.dp))
+                        OutlineButton(
+                            text = "Retake test",
+                            onClick = {
+                                lastResult = null
+                                qualityError = null
+                            }
+                        )
                     }
                 }
             }
@@ -1763,6 +1771,167 @@ private fun ApplicantProfileTab(authVm: AuthViewModel, onLogout: () -> Unit, ale
     val alerts by alertsVm.alerts.collectAsState()
     LaunchedEffect(Unit) { alertsVm.startListening() }
 
+    var showEditProfile by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    var showHelp by remember { mutableStateOf(false) }
+    var deleteError by remember { mutableStateOf<String?>(null) }
+    var isDeleting by remember { mutableStateOf(false) }
+
+    // ── Edit Profile Dialog ──────────────────────────────────────────────
+    if (showEditProfile && user != null) {
+        var editName by remember { mutableStateOf(user?.name ?: "") }
+        var editPhone by remember { mutableStateOf(user?.phone ?: "") }
+
+        AlertDialog(
+            onDismissRequest = { showEditProfile = false },
+            containerColor = CardWhite,
+            shape = RoundedCornerShape(20.dp),
+            title = { Text("Edit profile", fontWeight = FontWeight.Medium, fontSize = 17.sp, color = TextPrimary) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = editName,
+                        onValueChange = { editName = it },
+                        label = { Text("Full name") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = editPhone,
+                        onValueChange = { editPhone = it },
+                        label = { Text("Phone number") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone)
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (editName.isNotBlank()) {
+                        authVm.updateProfile(editName.trim(), editPhone.trim())
+                        showEditProfile = false
+                    }
+                }) {
+                    Text("Save", color = BrandRed, fontWeight = FontWeight.Medium)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEditProfile = false }) {
+                    Text("Cancel", color = TextSecondary)
+                }
+            }
+        )
+    }
+
+    // ── Delete Account Confirmation Dialog ────────────────────────────────
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { if (!isDeleting) { showDeleteConfirm = false; deleteError = null } },
+            containerColor = CardWhite,
+            shape = RoundedCornerShape(20.dp),
+            title = { Text("Delete your account?", fontWeight = FontWeight.Medium, fontSize = 17.sp, color = TextPrimary) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "This will permanently delete your account, profile, screening records, and all associated data. This action cannot be undone.",
+                        fontSize = 13.sp,
+                        color = TextSecondary,
+                        lineHeight = 19.sp
+                    )
+                    Text(
+                        "Under RA 10173 (Data Privacy Act of 2012), you have the right to request erasure of your personal data.",
+                        fontSize = 12.sp,
+                        color = TextHint,
+                        lineHeight = 17.sp
+                    )
+                    if (deleteError != null) {
+                        Text(deleteError.orEmpty(), color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        isDeleting = true
+                        deleteError = null
+                        authVm.deleteAccount(
+                            onSuccess = {
+                                isDeleting = false
+                                showDeleteConfirm = false
+                                onLogout()
+                            },
+                            onError = { msg ->
+                                isDeleting = false
+                                deleteError = msg
+                            }
+                        )
+                    },
+                    enabled = !isDeleting
+                ) {
+                    Text(
+                        if (isDeleting) "Deleting..." else "Delete permanently",
+                        color = MaterialTheme.colorScheme.error,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            },
+            dismissButton = {
+                if (!isDeleting) {
+                    TextButton(onClick = { showDeleteConfirm = false; deleteError = null }) {
+                        Text("Cancel", color = TextSecondary)
+                    }
+                }
+            }
+        )
+    }
+
+    // ── Help Screen Dialog ───────────────────────────────────────────────
+    if (showHelp) {
+        AlertDialog(
+            onDismissRequest = { showHelp = false },
+            containerColor = CardWhite,
+            shape = RoundedCornerShape(20.dp),
+            title = { Text("How to use BloodLink", fontWeight = FontWeight.Medium, fontSize = 17.sp, color = TextPrimary) },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    HelpSection(
+                        title = "Joining an event",
+                        body = "Go to the Event tab and enter the event code provided by the blood drive organizer, or scan the QR code displayed at the venue."
+                    )
+                    HelpSection(
+                        title = "Pallor test (eye)",
+                        body = "Pull your lower eyelid down gently to expose the pink inner surface. Hold your phone 20-30 cm from your eye in good lighting (natural or white fluorescent). The AI analyzes the conjunctiva color for signs of anemia."
+                    )
+                    HelpSection(
+                        title = "Jaundice test (eye)",
+                        body = "Look slightly upward so the white part of your eye (sclera) is well exposed. Hold your eye wide open in bright, even lighting. The AI checks for yellow discoloration which may indicate liver issues."
+                    )
+                    HelpSection(
+                        title = "Tips for best results",
+                        body = "Use natural daylight or bright white fluorescent light. Avoid yellow or warm-toned lighting. Keep your phone steady and close (20-30 cm). Make sure the target area fills most of the camera frame. Remove glasses or contact lenses if possible."
+                    )
+                    HelpSection(
+                        title = "Understanding results",
+                        body = "\"Normal\" means no concerning signs were detected. \"Possible sign\" means the AI detected something worth reviewing — this is NOT a diagnosis. A trained staff member will review all results during the screening event."
+                    )
+                    HelpSection(
+                        title = "Privacy and data",
+                        body = "Your photos are processed on-device and are never uploaded. Only the screening result (Normal or Possible sign) is stored. You can delete your account and all data at any time from this screen."
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showHelp = false }) {
+                    Text("Got it", color = BrandRed, fontWeight = FontWeight.Medium)
+                }
+            }
+        )
+    }
+
     Column(Modifier.fillMaxSize().background(SurfaceBg)) {
         BrandTopBar(
             title = user?.name ?: "Profile",
@@ -1780,18 +1949,36 @@ private fun ApplicantProfileTab(authVm: AuthViewModel, onLogout: () -> Unit, ale
                 BrandCard {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         AvatarCircle(u.name.take(2), modifier = Modifier.size(48.dp))
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(u.name, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = TextPrimary)
                             Text(u.email, fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 2.dp))
+                            if (u.phone.isNotBlank()) {
+                                Text(u.phone, fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 1.dp))
+                            }
                             StatusBadge(
                                 text = u.role.name.lowercase().replaceFirstChar { it.uppercase() },
                                 type = BadgeType.GRAY
                             )
                         }
+                        IconButton(onClick = { showEditProfile = true }) {
+                            Icon(Icons.Outlined.Edit, contentDescription = "Edit profile", tint = BrandRed, modifier = Modifier.size(20.dp))
+                        }
                     }
                 }
             }
 
+            // ── Quick actions ────────────────────────────────────────────
+            BrandCard {
+                Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                    ProfileMenuItem(icon = Icons.Outlined.HelpOutline, label = "Help & FAQ", onClick = { showHelp = true })
+                    SectionDivider()
+                    ProfileMenuItem(icon = Icons.Outlined.Logout, label = "Log out", onClick = onLogout)
+                    SectionDivider()
+                    ProfileMenuItem(icon = Icons.Outlined.DeleteForever, label = "Delete account", onClick = { showDeleteConfirm = true }, isDestructive = true)
+                }
+            }
+
+            // ── Notifications ────────────────────────────────────────────
             Text("Notifications", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = TextPrimary)
 
             if (alerts.isEmpty()) {
@@ -1820,9 +2007,53 @@ private fun ApplicantProfileTab(authVm: AuthViewModel, onLogout: () -> Unit, ale
                 }
             }
 
-            Spacer(Modifier.height(8.dp))
-            OutlineButton(text = "Log out", onClick = onLogout)
+            Spacer(Modifier.height(40.dp))
         }
+    }
+}
+
+@Composable
+private fun ProfileMenuItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    isDestructive: Boolean = false
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = if (isDestructive) MaterialTheme.colorScheme.error else TextSecondary,
+            modifier = Modifier.size(20.dp)
+        )
+        Text(
+            label,
+            fontSize = 14.sp,
+            color = if (isDestructive) MaterialTheme.colorScheme.error else TextPrimary,
+            modifier = Modifier.weight(1f)
+        )
+        Icon(
+            Icons.Outlined.ChevronRight,
+            contentDescription = null,
+            tint = TextHint,
+            modifier = Modifier.size(18.dp)
+        )
+    }
+}
+
+@Composable
+private fun HelpSection(title: String, body: String) {
+    Column {
+        Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = TextPrimary)
+        Spacer(Modifier.height(4.dp))
+        Text(body, fontSize = 12.sp, color = TextSecondary, lineHeight = 18.sp)
     }
 }
 
@@ -3195,4 +3426,4 @@ private fun ConsentPoint(
             fontWeight = if (highlight) FontWeight.Medium else FontWeight.Normal
         )
     }
-} 
+}
